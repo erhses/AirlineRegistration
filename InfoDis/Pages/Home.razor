@@ -1,0 +1,112 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@using BusinessLogic.DTO;
+@inject NavigationManager NavigationManager
+@implements IAsyncDisposable
+
+<h2 class="text-yellow-400 text-3xl font-bold">DEPARTURES</h2>
+
+@if (_hubConnection?.State == HubConnectionState.Connected)
+{
+    <p class="text-green-500">✓ Connected to flight updates</p>
+}
+else if (_hubConnection?.State == HubConnectionState.Connecting)
+{
+    <p class="text-yellow-500">⟳ Connecting...</p>
+}
+else
+{
+    <p class="text-red-500">✗ Disconnected from flight updates</p>
+}
+
+<table class="table-auto w-full mt-4 bg-black text-white text-center">
+    <thead class="bg-yellow-500 text-white">
+        <tr>
+            <th class="p-2">Time</th>
+            <th class="p-2">Destination</th>
+            <th class="p-2">Flight</th>
+            <th class="p-2">Gate</th>
+            <th class="p-2">Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (Flights != null && Flights.Any())
+        {
+            @foreach (var flight in Flights.OrderBy(f => f.DepartureTime))
+            {
+                <tr>
+                    <td class="p-2">@flight.DepartureTime.ToString("HH:mm")</td>
+                    <td class="p-2">@(flight.Destination?.ToUpper() ?? "N/A")</td>
+                    <td class="p-2">@(flight.FlightNumber ?? "N/A")</td>
+                    <td class="p-2 text-yellow-400 font-bold">@(flight.Gate ?? "TBD")</td>
+                    <td class="p-2 text-red-500 font-semibold">@(flight.Status)</td>
+                </tr>
+            }
+        }
+        else
+        {
+            <tr>
+                <td colspan="5" class="p-4 text-gray-400">No flights available</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<FlightDto> Flights = new();
+    private HubConnection? _hubConnection;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri("/flightinfo"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hubConnection.On<FlightDto>("FlightStatusChanged", (updatedFlight) =>
+        {
+            if (updatedFlight != null && Flights != null)
+            {
+                var existing = Flights.FirstOrDefault(f => f.Id == updatedFlight.Id);
+                if (existing != null)
+                {
+                    var index = Flights.IndexOf(existing);
+                    Flights[index] = updatedFlight;
+                }
+                else
+                {
+                    Flights.Add(updatedFlight);
+                }
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
+        _hubConnection.On<List<FlightDto>>("FlightListUpdated", (flightList) =>
+        {
+            if (flightList != null)
+            {
+                Flights = flightList;
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
+        try
+        {
+            await _hubConnection.StartAsync();
+            await _hubConnection.SendAsync("SubscribeToAllFlights");
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"SignalR connection error: {ex.Message}");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hubConnection is not null)
+        {
+            await _hubConnection.DisposeAsync();
+        }
+    }
+}
